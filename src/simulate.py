@@ -2,13 +2,23 @@ import numpy as np
 from utils import interp_history
 
 
-def simulate(T, dt, system, delays, history, controller, verbose=False):
+def simulate(
+    T,
+    dt,
+    system,
+    delays,
+    history,
+    controller,
+    delayed_measurement=True,
+    verbose=False,
+):
     A = system["A"]
     B = system["B"]
-    C = system["C"]
+    if delayed_measurement:
+        C = system["C"]
 
     phi1 = delays["phi1"]
-    phi2 = delays["phi2"]
+    phi2 = delays.get("phi2", None)
 
     z_history = history["z_history"]
     u_history = history["u_history"]
@@ -18,10 +28,14 @@ def simulate(T, dt, system, delays, history, controller, verbose=False):
 
     n = A.shape[0]
     m = B.shape[1]
-    p = C.shape[0]
+    if delayed_measurement:
+        p = C.shape[0]
 
     Z = np.zeros((N + 1, n))
-    Y = np.zeros((N + 1, p))
+    if delayed_measurement:
+        Y = np.zeros((N + 1, p))
+    else:
+        Y = np.zeros((N + 1, n))
     U = np.zeros((N + 1, m))
 
     Z[0] = np.asarray(z_history(0.0), dtype=float).reshape(-1)
@@ -35,10 +49,11 @@ def simulate(T, dt, system, delays, history, controller, verbose=False):
         print(f"N steps = {N}")
         print(f"state dim = {n}")
         print(f"input dim = {m}")
-        print(f"output dim = {p}")
+        if delayed_measurement:
+            print(f"output dim = {p}")
+        print(f"delayed_measurement = {delayed_measurement}")
         print()
 
-    # progress reporting interval (~10 updates)
     report_every = max(1, N // 10)
 
     for k in range(N + 1):
@@ -53,14 +68,22 @@ def simulate(T, dt, system, delays, history, controller, verbose=False):
         u_times = t_grid[:max(k, 1)]
         u_vals = U[:max(k, 1)]
 
-        # measurement Y(t) = C Z(phi2(t))
-        z_del = interp_history(phi2(t), z_times, z_vals, z_history)
-        Y[k] = C @ z_del
+        # measurement model
+        if delayed_measurement:
+            # output feedback with delay
+            if phi2 is None:
+                raise ValueError("delayed_measurement=True requires delays['phi2']")
+            z_meas = interp_history(phi2(t), z_times, z_vals, z_history)
+            Y[k] = C @ z_meas
+        else:
+            # full state feedback
+            z_meas = Z[k]
+            Y[k] = z_meas
 
         # controller update
         U[k] = controller.step(
-            t=t,
-            Y=Y[k],
+            t,
+            Y[k],
             t_U=u_times,
             U=u_vals,
             dt=dt,

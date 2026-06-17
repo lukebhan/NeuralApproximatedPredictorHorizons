@@ -16,7 +16,7 @@ from phi_inv import compute_phi_inv_direct_grid, make_phi_inv_from_grid_pchip
 
 N_SAMPLES = 2000
 T = 10.0
-DT_GRID = 1e-2
+DT_GRID = 1e-3
 
 OUTFILE = "../dataset/psi_dataset.pt"
 SEED = 0

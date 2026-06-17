@@ -227,3 +227,157 @@ class PredictorFeedbackController:
         self.u_hist.append(self.last_u.copy())
 
         return self.last_u
+
+class StatePredictorFeedbackController:
+    def __init__(self, system, delays, init, n_quad=40):
+        """
+        Predictor-feedback controller with direct state measurement.
+
+        system:
+            {
+                "A": A,
+                "B": B,
+                "K": K,
+            }
+
+        delays:
+            {
+                "phi1": phi1,
+                "dphi1": dphi1,
+                "phi1_inv": phi1_inv,
+            }
+
+        init:
+            {
+                "u_history": u_history,
+            }
+        """
+        self.A = np.asarray(system["A"], dtype=float)
+        self.B = np.asarray(system["B"], dtype=float)
+        self.K = np.asarray(system["K"], dtype=float)
+
+        self.phi1 = delays["phi1"]
+        self.dphi1 = delays["dphi1"]
+        self.phi1_inv = delays["phi1_inv"]
+
+        self.u_history = init["u_history"]
+
+        self.n_quad = int(n_quad)
+        self.m = self.B.shape[1]
+
+        self.reset()
+
+    def reset(self):
+        self.hat_Z = None
+        self.hat_P = None
+        self.last_u = np.zeros(self.m, dtype=float)
+
+        self.t_hist = []
+        self.hat_Z_hist = []
+        self.hat_P_hist = []
+        self.u_hist = []
+
+    def zero_control(self):
+        return np.zeros(self.m, dtype=float)
+
+    def predictor_available(self, t):
+        """
+        Only use the predictor-based control once phi1(t) >= 0.
+        Before that, hold the control at zero.
+        """
+        return self.phi1(t) >= 0.0
+
+    def compute_hat_P(self, t, hat_Z, t_U, U):
+        """
+        hatP(t) = exp(A(phi1^{-1}(t)-t)) hatZ(t)
+                  + int_{phi1(t)}^t exp(A(phi1^{-1}(t)-phi1^{-1}(theta))) B U(theta)
+                    / phi1'(phi1^{-1}(theta)) dtheta.
+
+        This should only be called when phi1(t) >= 0.
+        """
+        if not self.predictor_available(t):
+            raise ValueError(
+                f"compute_hat_P called at t={t}, but phi1(t)={self.phi1(t)} < 0."
+            )
+
+        hat_Z = np.asarray(hat_Z, dtype=float).reshape(-1)
+
+        a = self.phi1(t)
+        b = t
+
+        rho_t = self.phi1_inv(t)
+        out = expm(self.A * (rho_t - t)) @ hat_Z
+
+        if abs(b - a) < 1e-14:
+            return out
+
+        thetas = np.linspace(a, b, self.n_quad)
+        vals = []
+
+        for theta in thetas:
+            u_val = np.asarray(
+                interp_history(theta, t_U, U, self.u_history),
+                dtype=float,
+            ).reshape(-1)
+
+            rho_theta = self.phi1_inv(theta)
+            denom = self.dphi1(rho_theta)
+
+            vals.append(
+                expm(self.A * (rho_t - rho_theta)) @ (self.B @ u_val) / denom
+            )
+
+        vals = np.asarray(vals, dtype=float)
+        integ = np.trapz(vals, thetas, axis=0)
+
+        return out + integ
+
+    def compute_control(self, t, Z, t_U, U):
+        """
+        Direct state feedback:
+            hat_Z(t) = Z(t)
+
+        Hold the control at zero until phi1(t) >= 0, then switch to
+        predictor feedback.
+        """
+        hat_Z = np.asarray(Z, dtype=float).reshape(-1)
+
+        if not self.predictor_available(t):
+            u = self.zero_control()
+            hat_P = hat_Z.copy()
+            return u, hat_Z, hat_P
+
+        hat_P = self.compute_hat_P(t, hat_Z, t_U, U)
+        u = self.K @ hat_P
+        return np.asarray(u, dtype=float).reshape(-1), hat_Z, hat_P
+
+    def step(self, t, Z, t_U, U, dt):
+        """
+        Advance the controller one time step.
+
+        Inputs
+        ------
+        t   : current time
+        Z   : current measured state Z(t)
+        t_U : stored control times up to current time
+        U   : stored control values up to current time
+        dt  : step size (unused, included for interface consistency)
+
+        Returns
+        -------
+        u_now : control U(t)
+        """
+        Z = np.asarray(Z, dtype=float).reshape(-1)
+
+        u_now, hat_Z, hat_P = self.compute_control(t, Z, t_U, U)
+
+        self.hat_Z = hat_Z
+        self.hat_P = hat_P
+        self.last_u = np.asarray(u_now, dtype=float).reshape(-1)
+
+        self.t_hist.append(float(t))
+        self.hat_Z_hist.append(hat_Z.copy())
+        self.hat_P_hist.append(hat_P.copy())
+        self.u_hist.append(self.last_u.copy())
+
+        return self.last_u

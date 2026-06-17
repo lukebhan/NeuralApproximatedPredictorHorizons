@@ -1,4 +1,5 @@
 import os
+import argparse
 import numpy as np
 import torch
 import torch.nn as nn
@@ -9,15 +10,25 @@ from neuralop.models import FNO
 
 
 # ============================================================
-# Hard-coded settings
+# Settings (CLI-overridable; defaults reproduce the long-horizon model)
 # ============================================================
 
-DATA_PATH = "../dataset/psi_dataset.pt"
-SAVE_DIR = "../models/fno_psi"
+parser = argparse.ArgumentParser(description="Train the inverse-delay FNO.")
+parser.add_argument("--data", default="../dataset/psi_dataset.pt",
+                    help="path to the dataset .pt")
+parser.add_argument("--save_dir", default="../models/fno_psi",
+                    help="directory to save fno_model.pt")
+parser.add_argument("--epochs", type=int, default=200)
+parser.add_argument("--no_plots", action="store_true",
+                    help="skip the (blocking) training/prediction plots")
+args = parser.parse_args()
+
+DATA_PATH = args.data
+SAVE_DIR = args.save_dir
 
 SEED = 0
 
-EPOCHS = 200
+EPOCHS = args.epochs
 BATCH_SIZE = 32
 LR = 1e-3
 
@@ -231,6 +242,10 @@ print("Model saved to:", MODEL_PATH)
 # ============================================================
 # Plot training curves
 # ============================================================
+
+if args.no_plots:
+    print("Skipping plots (--no_plots).")
+    raise SystemExit(0)
 
 plt.figure()
 
